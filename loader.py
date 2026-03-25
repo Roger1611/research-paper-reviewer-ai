@@ -21,11 +21,15 @@ def _is_pdf(uploaded_file):
     return file_type == "application/pdf" or file_name.lower().endswith(".pdf")
 
 
+def _is_pdf_metadata(file_name="", file_type=""):
+    return file_type == "application/pdf" or file_name.lower().endswith(".pdf")
+
+
 def _load_pdf_text(file_bytes):
     pdf_reader = PyPDF2.PdfReader(BytesIO(file_bytes))
     pages = []
 
-    for page_number, page in enumerate(pdf_reader.pages, start=1):
+    for page in pdf_reader.pages:
         page_text = page.extract_text()
         if page_text and page_text.strip():
             pages.append(page_text.strip())
@@ -46,9 +50,18 @@ def _load_text_file(file_bytes):
     return text
 
 
+def load_bytes(file_bytes, file_name="", file_type=""):
+    if not file_bytes:
+        raise ValueError("The uploaded file is empty.")
+
+    if _is_pdf_metadata(file_name=file_name, file_type=file_type):
+        return _load_pdf_text(file_bytes)
+
+    return _load_text_file(file_bytes)
+
+
 def load_file(uploaded_file):
     file_bytes = _read_uploaded_bytes(uploaded_file)
-
     if _is_pdf(uploaded_file):
         return _load_pdf_text(file_bytes)
 
