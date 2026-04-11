@@ -59,10 +59,10 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-def run_research_agent(topic: str) -> dict:
+def run_research_agent(topic: str, callbacks: list | None = None) -> dict:
     """Run the full research pipeline for a topic and return the synthesis report dict."""
     tools = [arxiv_search, fetch_paper_text, synthesize_papers]
-    llm = OllamaLLM(model=config.OLLAMA_MODEL, base_url="http://localhost:11434")
+    llm = OllamaLLM(model=config.OLLAMA_MODEL, base_url=config.OLLAMA_BASE_URL)
 
     try:
         agent = create_react_agent(llm, tools, _REACT_PROMPT)
@@ -73,6 +73,7 @@ def run_research_agent(topic: str) -> dict:
             verbose=True,
             max_iterations=15,
             handle_parsing_errors=True,
+            callbacks=callbacks or [],
         )
         result = executor.invoke({
             "input": f"Research this topic thoroughly and synthesize findings: {topic}"
