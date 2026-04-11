@@ -6,5 +6,6 @@ numpy
 langchain
 langchain-community
 langchain-ollama
+langgraph
 arxiv
 tiktoken

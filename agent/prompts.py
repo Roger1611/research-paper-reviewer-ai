@@ -13,8 +13,8 @@ Rules:
 - If a paper fails to load, continue with the rest — do not stop.
 - Call synthesize_papers exactly once, only after papers are loaded.
 - Identify both consensus (claims multiple papers agree on) and contradictions (claims papers dispute).
-- When synthesize_papers returns a result, copy it EXACTLY as your Final Answer. Do not paraphrase,
-  wrap, or add commentary. The Final Answer must be the raw JSON string and nothing else.
+- When synthesize_papers returns a result, respond with that JSON string exactly. Do not paraphrase,
+  wrap, or add commentary — return the raw JSON and nothing else.
 """
 
 SYNTHESIS_PROMPT = """You are synthesizing academic research on: {topic}
