@@ -4,3 +4,8 @@ faiss-cpu
 PyPDF2
 requests
 numpy
+langchain
+langchain-community
+langchain-ollama
+arxiv
+tiktoken
