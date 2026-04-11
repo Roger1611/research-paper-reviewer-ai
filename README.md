@@ -37,7 +37,7 @@ config.py               All constants
 
 ```bash
 pip install -r requirements.txt
-ollama pull llama3.1:8b-instruct-q4
+ollama pull llama3.1:8b-instruct-q4_K_M
 ```
 
 ## Run
@@ -65,7 +65,7 @@ python cli.py "diffusion models for protein structure prediction"
 
 | Constant | Default |
 |---|---|
-| `OLLAMA_MODEL` | `llama3.1:8b-instruct-q4` |
+| `OLLAMA_MODEL` | `llama3.1:8b-instruct-q4_K_M` |
 | `ARXIV_MAX_RESULTS` | `6` |
 | `CHUNK_SIZE` | `220` words |
 | `CHUNK_OVERLAP` | `40` words |
