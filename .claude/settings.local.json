@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c \"from langchain.tools import tool; print\\('langchain.tools ok'\\)\")",
-      "Bash(python -c \"from langchain_core.tools import tool; print\\('langchain_core.tools ok'\\)\")",
-      "Bash(python -c \"from langchain_ollama import ChatOllama; llm = ChatOllama\\(model='test'\\); print\\('ChatOllama ok'\\)\")"
-    ]
-  }
-}
