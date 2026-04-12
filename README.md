@@ -1,54 +1,78 @@
 # Autonomous Research Synthesis Agent
 
-Fetches papers from ArXiv, reads their full text, cross-references findings, and produces a structured synthesis report — from a single topic string.
+Give it a research topic; it fetches papers from ArXiv, extracts methods and open problems, identifies research gaps, generates scored hypotheses, and produces a structured report.
 
 ## How it works
 
-1. **Search** — a LangGraph ReAct agent calls `arxiv_search` and returns paper metadata. Papers whose title+abstract embed below 0.25 cosine similarity with the topic are dropped before any PDFs are downloaded.
+The pipeline is a 6-node LangGraph `StateGraph`. Each node updates a shared `AgentState` dict.
 
-2. **Fetch** — the orchestrator calls `fetch_paper_text` directly for each surviving paper. Each PDF is downloaded, chunked, and indexed in a per-paper FAISS store.
+1. **decompose_topic** — splits the topic into two domains: a methods/techniques side (Domain A) and a problems/applications side (Domain B).
 
-3. **Synthesize** — the orchestrator calls `synthesize_papers` directly (not via the LLM). The top-K chunks from each paper are retrieved and passed to a local Ollama LLM with a structured prompt asking for consensus findings, contested claims, and open problems in JSON form.
+2. **search_domains** — runs `arxiv_search` separately for each domain, filters out off-topic results by embedding similarity, then downloads and indexes each surviving paper's full text into a per-paper FAISS store.
 
-4. **Score** — each consensus finding is scored by cosine similarity between the finding text embedding and the chunks that cited it (or all retrieved chunks if no citations). Hallucinated citation IDs are stripped; version-less IDs (e.g. `2405.09820`) are resolved to their versioned form.
+3. **extract_knowledge** — for each paper, calls an LLM to extract the specific methods it introduces and the problems it addresses. Results are accumulated and deduplicated across all papers.
 
-5. **Render** — the JSON synthesis is merged with ArXiv metadata and formatted to markdown.
+4. **detect_gaps** — sends the full methods list and problems list to an LLM and asks it to find non-obvious combinations where a method hasn't been applied to a problem.
+
+5. **generate_hypotheses** — for each gap, retrieves supporting chunks from the paper store and asks an LLM to generate a concrete, mechanistically grounded hypothesis with a feasibility score.
+
+6. **conditional loop** — if the top hypothesis score is below `MIN_CONFIDENCE_THRESHOLD` and the iteration limit hasn't been reached, loops back to step 5. Otherwise proceeds to `build_report`.
 
 ## Project layout
 
 ```
-cli.py                  Entry point — runs the agent and prints the report
+cli.py                  Entry point
 agent/
-  orchestrator.py       LangGraph agent for search; direct orchestration of fetch + synthesis
-  memory.py             Stub — in-run state is handled by LangGraph message graph
+  orchestrator.py       StateGraph definition and run_research_agent()
+  state.py              AgentState TypedDict
+  backend.py            LLMBackend — wraps OpenRouter and Ollama behind one interface
   prompts.py            All prompt strings
   tools/
-    arxiv_tool.py       arxiv_search — fetches paper metadata from ArXiv
-    pdf_tool.py         fetch_paper_text — downloads, chunks, and indexes PDFs
-    synthesis_tool.py   synthesize_papers — cross-paper synthesis and confidence scoring
+    arxiv_tool.py       arxiv_search — fetches paper metadata
+    pdf_tool.py         fetch_paper_text — downloads, chunks, indexes PDFs
+    extract_tool.py     extract_methods_problems — per-paper LLM extraction
+    gap_tool.py         detect_gaps — cross-domain gap analysis
+    hypothesis_tool.py  generate_hypotheses — scored hypothesis generation
+    synthesis_tool.py   synthesize_papers — used by the legacy ollama pipeline
 core/
   chunker.py            Sentence-aware text chunking
   embedder.py           SentenceTransformer embeddings (all-MiniLM-L6-v2)
   retriever.py          FAISS index creation and search
-  loader.py             PDF and plain text extraction
+  loader.py             PDF text extraction
 report/
-  builder.py            Validates and assembles the final report dict
+  builder.py            Assembles and validates the final report dict
   formatter.py          Renders the report dict to markdown
 config.py               All constants
 ```
+
+## Backend comparison
+
+| | OpenRouter (default) | Ollama |
+|---|---|---|
+| Quality | Higher | Lower |
+| Cost | API credits | Free |
+| Setup | API key in `.env` | Ollama running locally |
+| Flag | _(default)_ | `--backend ollama` |
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
+
+# OpenRouter (default)
+cp .env.example .env
+# edit .env and add your OPENROUTER_API_KEY
+
+# Ollama (optional)
+# uncomment langchain-ollama in requirements.txt, then:
 ollama pull llama3.1:8b-instruct-q4_K_M
 ```
 
 ## Run
 
 ```bash
-ollama serve   # if not already running
-python cli.py "diffusion models for protein structure prediction"
+python cli.py "sensor fusion for autonomous driving"
+python cli.py "sensor fusion for autonomous driving" --backend ollama
 ```
 
 ## Output schema
@@ -57,6 +81,16 @@ python cli.py "diffusion models for protein structure prediction"
 {
   "topic": "...",
   "papers": [{"title": "", "authors": "", "arxiv_id": "", "url": ""}],
+  "hypotheses": [
+    {
+      "hypothesis": "...",
+      "mechanism": "...",
+      "challenge": "...",
+      "feasibility_score": 0.72,
+      "score_rationale": "...",
+      "citations": ["2301.xxxxx"]
+    }
+  ],
   "consensus": [{"finding": "", "confidence": 0.85, "citations": ["2301.xxxxx"]}],
   "contested": [{"claim": "", "positions": ["stance A", "stance B"], "citations": []}],
   "open_problems": ["..."],
@@ -69,8 +103,12 @@ python cli.py "diffusion models for protein structure prediction"
 
 | Constant | Default |
 |---|---|
-| `OLLAMA_MODEL` | `llama3.1:8b-instruct-q4_K_M` |
+| `FAST_MODEL` | `anthropic/claude-3.5-haiku` |
+| `STRONG_MODEL` | `anthropic/claude-3.5-sonnet` |
+| `OLLAMA_FAST_MODEL` | `llama3.1:8b-instruct-q4_K_M` |
 | `ARXIV_MAX_RESULTS` | `6` |
+| `MAX_HYPOTHESIS_ITERATIONS` | `2` |
+| `MIN_CONFIDENCE_THRESHOLD` | `0.35` |
+| `HYPOTHESIS_TOP_K` | `5` |
 | `CHUNK_SIZE` | `220` words |
-| `CHUNK_OVERLAP` | `40` words |
 | `SYNTHESIS_TOP_K` | `3` chunks per paper |

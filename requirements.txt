@@ -5,7 +5,11 @@ requests
 numpy
 langchain
 langchain-community
-langchain-ollama
 langgraph
 arxiv
 tiktoken
+openai
+python-dotenv
+
+# ollama backend (optional, only needed if running --backend ollama)
+# langchain-ollama
