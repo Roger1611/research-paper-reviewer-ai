@@ -25,6 +25,41 @@ def _call_ollama(prompt: str) -> str:
     return resp.json()["response"]
 
 
+def _strip_arxiv_prefix(arxiv_id: str) -> str:
+    return re.sub(r"(?i)^arxiv:", "", arxiv_id).strip()
+
+
+def _normalise_citations(report: dict) -> dict:
+    """Strip any 'arXiv:' prefix from citation IDs the model may have added."""
+    for item in report.get("consensus", []):
+        if isinstance(item, dict):
+            item["citations"] = [_strip_arxiv_prefix(c) for c in item.get("citations", [])]
+    for item in report.get("contested", []):
+        if isinstance(item, dict):
+            item["citations"] = [_strip_arxiv_prefix(c) for c in item.get("citations", [])]
+    return report
+
+
+def _validate_citations(report: dict, valid_ids: set[str]) -> dict:
+    """Remove hallucinated IDs; resolve version-less IDs (e.g. 2405.09820 → 2405.09820v1)."""
+    def resolve(cid: str) -> str | None:
+        if cid in valid_ids:
+            return cid
+        base = re.sub(r"v\d+$", "", cid)
+        for vid in valid_ids:
+            if re.sub(r"v\d+$", "", vid) == base:
+                return vid
+        return None
+
+    for item in report.get("consensus", []):
+        if isinstance(item, dict):
+            item["citations"] = [r for c in item.get("citations", []) if (r := resolve(c))]
+    for item in report.get("contested", []):
+        if isinstance(item, dict):
+            item["citations"] = [r for c in item.get("citations", []) if (r := resolve(c))]
+    return report
+
+
 def _parse_json(text: str) -> dict | None:
     text = text.strip()
     if text.startswith("```"):
@@ -41,16 +76,27 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def _score_confidence(report: dict, paper_chunks: dict[str, list[str]], topic_emb: np.ndarray) -> dict:
-    """Replace placeholder 0.0 confidence values with cosine similarity scores."""
-    for finding in report.get("consensus", []):
-        if not isinstance(finding, dict):
-            continue  # simplified schema returns strings; skip scoring
-        cited = [c for aid in finding.get("citations", []) for c in paper_chunks.get(aid, [])]
-        if not cited:
-            finding["confidence"] = 0.0
-            continue
-        sims = [_cosine(topic_emb, e) for e in get_embeddings(cited)]
-        finding["confidence"] = round(float(np.mean(sims)), 3)
+    all_chunks = [c for chunks in paper_chunks.values() for c in chunks]
+    all_embs = get_embeddings(all_chunks) if all_chunks else []
+
+    normalized = []
+    for item in report.get("consensus", []):
+        if isinstance(item, str):
+            item = {"finding": item, "confidence": 0.0, "citations": []}
+
+        cited = [c for aid in item.get("citations", []) for c in paper_chunks.get(aid, [])]
+        pool_embs = get_embeddings(cited) if cited else all_embs
+
+        if len(pool_embs) > 0:
+            finding_emb = get_embeddings([item["finding"]])[0]
+            sims = [_cosine(finding_emb, e) for e in pool_embs]
+            item["confidence"] = round(float(np.mean(sims)), 3)
+        else:
+            item["confidence"] = 0.0
+
+        normalized.append(item)
+
+    report["consensus"] = normalized
     return report
 
 
@@ -79,8 +125,9 @@ def synthesize_papers(topic: str) -> str:
         f"[{aid}]\n" + "\n---\n".join(chunks)
         for aid, chunks in paper_chunks.items()
     )
+    arxiv_ids = ", ".join(paper_chunks.keys())
 
-    prompt = SYNTHESIS_PROMPT.format(topic=topic, paper_summaries=paper_summaries)
+    prompt = SYNTHESIS_PROMPT.format(topic=topic, paper_summaries=paper_summaries, arxiv_ids=arxiv_ids)
 
     try:
         raw = _call_ollama(prompt)
@@ -102,5 +149,7 @@ def synthesize_papers(topic: str) -> str:
     if report is None:
         return f"synthesis failed: model returned invalid JSON after retry. Raw output:\n{raw[:500]}"
 
+    report = _normalise_citations(report)
+    report = _validate_citations(report, set(paper_chunks.keys()))
     report = _score_confidence(report, paper_chunks, topic_emb)
     return json.dumps(report)
