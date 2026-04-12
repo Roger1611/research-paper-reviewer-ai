@@ -8,6 +8,7 @@ _DEFAULTS: dict[str, Any] = {
     "contested": [],
     "open_problems": [],
     "synthesis_narrative": "",
+    "hypotheses": [],
 }
 
 
@@ -46,5 +47,6 @@ def build_report(topic: str, synthesis_json: dict, paper_metadata: list[dict]) -
         for item in report["consensus"]
     ]
 
+    report["hypotheses"] = synthesis_json.get("hypotheses", [])
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     return report

@@ -27,6 +27,20 @@ def format_report_markdown(report: dict) -> str:
         lines.append(f"- **[{title}]({url})**" + (f"  \n  {authors}" if authors else ""))
     lines.append("")
 
+    # Research Hypotheses (new pipeline only — skipped if empty)
+    hypotheses = report.get("hypotheses", [])
+    if hypotheses:
+        lines += ["### Research Hypotheses", ""]
+        for h in hypotheses:
+            bar = _confidence_bar(h.get("feasibility_score", 0.0))
+            citations = h.get("citations", [])
+            cite_str = "  \n  *" + " · ".join(_arxiv_link(c) for c in citations) + "*" if citations else ""
+            lines.append(f"- {h.get('hypothesis', '')}")
+            lines.append(f"  - **Mechanism:** {h.get('mechanism', '')}")
+            lines.append(f"  - **Challenge:** {h.get('challenge', '')}")
+            lines.append(f"  `{bar}`{cite_str}")
+        lines.append("")
+
     # Consensus Findings
     lines += ["### Consensus Findings", ""]
     for item in report.get("consensus", []):
