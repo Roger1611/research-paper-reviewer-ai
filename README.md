@@ -4,23 +4,27 @@ Fetches papers from ArXiv, reads their full text, cross-references findings, and
 
 ## How it works
 
-1. `arxiv_search` — fetches the top-N most relevant papers from ArXiv (no API key needed)
-2. `fetch_paper_text` — downloads each PDF, chunks it, and builds a per-paper FAISS index
-3. `synthesize_papers` — queries all indexes, calls a local Ollama LLM, returns structured JSON
+1. **Search** — a LangGraph ReAct agent calls `arxiv_search` and returns paper metadata. Papers whose title+abstract embed below 0.25 cosine similarity with the topic are dropped before any PDFs are downloaded.
 
-A LangChain `AgentExecutor` with ReAct reasoning decides the order and repetition of tool calls. It loads at least 4 papers before synthesizing, identifies both consensus findings and contested claims, and scores confidence via cosine similarity between the topic embedding and supporting chunk embeddings.
+2. **Fetch** — the orchestrator calls `fetch_paper_text` directly for each surviving paper. Each PDF is downloaded, chunked, and indexed in a per-paper FAISS store.
+
+3. **Synthesize** — the orchestrator calls `synthesize_papers` directly (not via the LLM). The top-K chunks from each paper are retrieved and passed to a local Ollama LLM with a structured prompt asking for consensus findings, contested claims, and open problems in JSON form.
+
+4. **Score** — each consensus finding is scored by cosine similarity between the finding text embedding and the chunks that cited it (or all retrieved chunks if no citations). Hallucinated citation IDs are stripped; version-less IDs (e.g. `2405.09820`) are resolved to their versioned form.
+
+5. **Render** — the JSON synthesis is merged with ArXiv metadata and formatted to markdown.
 
 ## Project layout
 
 ```
 cli.py                  Entry point — runs the agent and prints the report
 agent/
-  orchestrator.py       AgentExecutor setup and run_research_agent()
-  memory.py             ConversationSummaryMemory backed by Ollama
-  prompts.py            All prompt strings (ReAct, synthesis, consensus, contradiction)
+  orchestrator.py       LangGraph agent for search; direct orchestration of fetch + synthesis
+  memory.py             Stub — in-run state is handled by LangGraph message graph
+  prompts.py            All prompt strings
   tools/
-    arxiv_tool.py       arxiv_search — fetches paper metadata
-    pdf_tool.py         fetch_paper_text — downloads, chunks, indexes PDFs
+    arxiv_tool.py       arxiv_search — fetches paper metadata from ArXiv
+    pdf_tool.py         fetch_paper_text — downloads, chunks, and indexes PDFs
     synthesis_tool.py   synthesize_papers — cross-paper synthesis and confidence scoring
 core/
   chunker.py            Sentence-aware text chunking
