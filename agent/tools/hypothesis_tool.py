@@ -5,6 +5,7 @@ import config
 from agent.backend import LLMBackend
 from agent.prompts import HYPOTHESIS_GENERATION_PROMPT
 from core.embedder import get_embeddings
+from core.json_utils import parse_json
 from core.retriever import search_chunks
 
 logger = logging.getLogger(__name__)
@@ -34,8 +35,10 @@ def generate_hypotheses(gaps: list[dict], paper_store: dict, topic: str, backend
 
         try:
             raw = llm.call(prompt, use_strong=True)
-            hypothesis = json.loads(raw)
-        except (json.JSONDecodeError, Exception) as e:
+            hypothesis = parse_json(raw)
+            if hypothesis is None:
+                raise ValueError(f"could not parse JSON from response: {raw[:300]}")
+        except Exception as e:
             logger.warning("hypothesis generation failed for gap '%s / %s': %s", gap.get("method"), gap.get("problem"), e)
             continue
 

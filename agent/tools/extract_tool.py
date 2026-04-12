@@ -1,8 +1,8 @@
-import json
 import logging
 
 from agent.backend import LLMBackend
 from agent.prompts import EXTRACTION_PROMPT
+from core.json_utils import parse_json
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,10 @@ def extract_methods_problems(arxiv_id: str, domain: str, chunks: list[str], back
 
     try:
         raw = llm.call(prompt, use_strong=False)
-        result = json.loads(raw)
-    except (json.JSONDecodeError, Exception) as e:
+        result = parse_json(raw)
+        if result is None:
+            raise ValueError(f"could not parse JSON: {raw[:200]}")
+    except Exception as e:
         logger.warning("extract_methods_problems failed for %s: %s", arxiv_id, e)
         return {"methods": [], "problems": []}
 

@@ -8,6 +8,7 @@ from langgraph.graph import StateGraph, END
 import config
 from agent.backend import LLMBackend
 from agent.prompts import TOPIC_DECOMPOSITION_PROMPT
+from core.json_utils import parse_json
 from agent.state import AgentState
 from agent.tools.arxiv_tool import arxiv_search
 from agent.tools.extract_tool import extract_methods_problems
@@ -41,7 +42,9 @@ def decompose_topic(state: AgentState) -> dict:
     llm = LLMBackend(state["backend"])
     prompt = TOPIC_DECOMPOSITION_PROMPT.format(topic=state["topic"])
     try:
-        result = json.loads(llm.call(prompt, use_strong=False))
+        result = parse_json(llm.call(prompt, use_strong=False))
+        if result is None:
+            raise ValueError("empty or unparseable response from decomposition LLM")
         domain_a = result["domain_a"]
         domain_b = result["domain_b"]
     except Exception as e:
@@ -116,12 +119,21 @@ def should_loop(state: AgentState) -> Literal["generate_hypotheses", "build_repo
 
 
 def build_report(state: AgentState) -> dict:
+    # Combine both domain paper lists into one deduped list for the formatter
+    seen: set[str] = set()
+    papers: list[dict] = []
+    for p in state["papers_a"] + state["papers_b"]:
+        aid = p.get("arxiv_id", "")
+        if aid not in seen:
+            seen.add(aid)
+            p.setdefault("url", f"https://arxiv.org/abs/{aid}" if aid else "")
+            papers.append(p)
+
     report = {
         "topic": state["topic"],
         "domain_a": state["domain_a"],
         "domain_b": state["domain_b"],
-        "papers_a": state["papers_a"],
-        "papers_b": state["papers_b"],
+        "papers": papers,
         "methods": state["methods"],
         "problems": state["problems"],
         "gaps": state["gaps"],

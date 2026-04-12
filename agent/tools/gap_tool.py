@@ -1,8 +1,8 @@
-import json
 import logging
 
 from agent.backend import LLMBackend
 from agent.prompts import GAP_DETECTION_PROMPT
+from core.json_utils import parse_json
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,10 @@ def detect_gaps(methods: list[str], problems: list[str], backend: str) -> list[d
 
     try:
         raw = llm.call(prompt, use_strong=True)
-        result = json.loads(raw)
-    except (json.JSONDecodeError, Exception) as e:
+        result = parse_json(raw)
+        if result is None:
+            raise ValueError(f"could not parse JSON from response: {raw[:300]}")
+    except Exception as e:
         logger.warning("detect_gaps failed: %s", e)
         return []
 

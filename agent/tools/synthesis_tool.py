@@ -10,6 +10,7 @@ import config
 from agent.prompts import SYNTHESIS_PROMPT
 from agent.tools.pdf_tool import get_paper_store
 from core.embedder import get_embeddings
+from core.json_utils import parse_json
 from core.retriever import search_chunks
 
 logger = logging.getLogger(__name__)
@@ -59,16 +60,6 @@ def _validate_citations(report: dict, valid_ids: set[str]) -> dict:
             item["citations"] = [r for c in item.get("citations", []) if (r := resolve(c))]
     return report
 
-
-def _parse_json(text: str) -> dict | None:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[^\n]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text.strip())
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -137,14 +128,14 @@ def synthesize_papers(topic: str) -> str:
 
     print(f"[synthesis] raw Ollama response:\n{raw}\n---", flush=True)
 
-    report = _parse_json(raw)
+    report = parse_json(raw)
     if report is None:
         logger.warning("first parse failed, retrying with strict prompt")
         try:
             raw = _call_ollama(f"Return ONLY valid JSON with no explanation or markdown.\n\n{prompt}")
         except Exception as e:
             return f"couldn't reach Ollama on retry: {e}"
-        report = _parse_json(raw)
+        report = parse_json(raw)
 
     if report is None:
         return f"synthesis failed: model returned invalid JSON after retry. Raw output:\n{raw[:500]}"

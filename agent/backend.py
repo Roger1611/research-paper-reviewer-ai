@@ -17,7 +17,7 @@ class LLMBackend:
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return resp.choices[0].message.content
+            return resp.choices[0].message.content or ""
 
         if self.backend == "ollama":
             model = config.OLLAMA_FAST_MODEL

@@ -12,8 +12,8 @@ TOP_K_RETRIEVAL = 4
 SYNTHESIS_TOP_K = 3
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-FAST_MODEL = "anthropic/claude-3.5-haiku"
-STRONG_MODEL = "anthropic/claude-3.5-sonnet"
+FAST_MODEL = "google/gemini-2.0-flash-lite-001"
+STRONG_MODEL = "deepseek/deepseek-chat"
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OLLAMA_FAST_MODEL = "llama3.1:8b-instruct-q4_K_M"
 MAX_HYPOTHESIS_ITERATIONS = 2
