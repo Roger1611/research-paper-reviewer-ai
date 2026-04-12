@@ -8,7 +8,7 @@ The pipeline is a 6-node LangGraph `StateGraph`. Each node updates a shared `Age
 
 1. **decompose_topic** — splits the topic into two domains: a methods/techniques side (Domain A) and a problems/applications side (Domain B).
 
-2. **search_domains** — runs `arxiv_search` separately for each domain, filters out off-topic results by embedding similarity, then downloads and indexes each surviving paper's full text into a per-paper FAISS store.
+2. **search_domains** — runs `arxiv_search` separately for each domain, filters out off-topic results by embedding similarity (cosine threshold 0.25), then downloads and indexes each surviving paper's full text into a per-paper FAISS store.
 
 3. **extract_knowledge** — for each paper, calls an LLM to extract the specific methods it introduces and the problems it addresses. Results are accumulated and deduplicated across all papers.
 
@@ -33,12 +33,13 @@ agent/
     extract_tool.py     extract_methods_problems — per-paper LLM extraction
     gap_tool.py         detect_gaps — cross-domain gap analysis
     hypothesis_tool.py  generate_hypotheses — scored hypothesis generation
-    synthesis_tool.py   synthesize_papers — used by the legacy ollama pipeline
+    synthesis_tool.py   synthesize_papers — legacy ollama pipeline only
 core/
   chunker.py            Sentence-aware text chunking
   embedder.py           SentenceTransformer embeddings (all-MiniLM-L6-v2)
   retriever.py          FAISS index creation and search
   loader.py             PDF text extraction
+  json_utils.py         parse_json — shared fence-stripping JSON parser
 report/
   builder.py            Assembles and validates the final report dict
   formatter.py          Renders the report dict to markdown
@@ -103,8 +104,8 @@ python cli.py "sensor fusion for autonomous driving" --backend ollama
 
 | Constant | Default |
 |---|---|
-| `FAST_MODEL` | `anthropic/claude-3.5-haiku` |
-| `STRONG_MODEL` | `anthropic/claude-3.5-sonnet` |
+| `FAST_MODEL` | `google/gemini-2.0-flash-lite-001` |
+| `STRONG_MODEL` | `deepseek/deepseek-chat` |
 | `OLLAMA_FAST_MODEL` | `llama3.1:8b-instruct-q4_K_M` |
 | `ARXIV_MAX_RESULTS` | `6` |
 | `MAX_HYPOTHESIS_ITERATIONS` | `2` |
