@@ -2,6 +2,7 @@ import json
 import logging
 import re
 
+import numpy as np
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
@@ -11,6 +12,7 @@ from agent.prompts import AGENT_SYSTEM_PROMPT
 from agent.tools.arxiv_tool import arxiv_search
 from agent.tools.pdf_tool import fetch_paper_text, get_paper_store
 from agent.tools.synthesis_tool import synthesize_papers
+from core.embedder import get_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,24 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+
+def _filter_relevant(papers: list[dict], topic: str, threshold: float = 0.25) -> list[dict]:
+    topic_emb = get_embeddings([topic])[0]
+    texts = [f"{p.get('title', '')} {p.get('abstract', '')}" for p in papers]
+    embs = get_embeddings(texts)
+    kept = []
+    for paper, emb in zip(papers, embs):
+        sim = _cosine(topic_emb, emb)
+        if sim >= threshold:
+            kept.append(paper)
+        else:
+            print(f"[orchestrator] skipping off-topic: {paper.get('arxiv_id')} sim={sim:.3f} — {paper.get('title', '')[:60]}", flush=True)
+    return kept
+
+
 def _extract_arxiv_meta(messages: list) -> list[dict]:
     """Pull the arxiv_search result out of the tool messages, if present."""
     for msg in messages:
@@ -48,36 +68,45 @@ def _extract_arxiv_meta(messages: list) -> list[dict]:
 
 def run_research_agent(topic: str, callbacks: list | None = None) -> dict:
     """Fetch papers via the agent, then run synthesis directly and return the report dict."""
-    # Agent handles only paper fetching — synthesis is called directly below
-    fetch_tools = [arxiv_search, fetch_paper_text]
     llm = ChatOllama(model=config.OLLAMA_MODEL, base_url=config.OLLAMA_BASE_URL)
 
-    invoke_config: dict = {"recursion_limit": 30}
+    invoke_config: dict = {"recursion_limit": 15}
     if callbacks:
         invoke_config["callbacks"] = callbacks
 
+    # Only give the agent arxiv_search — it can't be trusted to reliably chain tool calls
     try:
-        graph = create_react_agent(llm, fetch_tools, prompt=AGENT_SYSTEM_PROMPT)
+        graph = create_react_agent(llm, [arxiv_search], prompt=AGENT_SYSTEM_PROMPT)
         result = graph.invoke(
-            {"messages": [HumanMessage(content=f"Find and load papers on this topic: {topic}")]},
+            {"messages": [HumanMessage(content=f"Search ArXiv for papers on this topic: {topic}")]},
             config=invoke_config,
         )
     except Exception as e:
         logger.error("agent execution failed: %s", e)
         return {"error": str(e), "raw": ""}
 
-    print("[orchestrator] tool calls made:", flush=True)
-    for msg in result["messages"]:
-        if isinstance(msg, ToolMessage):
-            print(f"  {getattr(msg, 'name', '?')}: {str(msg.content)[:120]}", flush=True)
-
     paper_meta = _extract_arxiv_meta(result["messages"])
+    if not paper_meta:
+        logger.error("arxiv_search returned no results")
+        return {"error": "no papers found", "raw": "", "_papers_meta": []}
+
+    paper_meta = _filter_relevant(paper_meta, topic)
+    if not paper_meta:
+        return {"error": "all papers were off-topic after relevance filtering", "raw": "", "_papers_meta": []}
+
+    print(f"[orchestrator] fetching {len(paper_meta)} papers...", flush=True)
+    for paper in paper_meta:
+        aid = paper.get("arxiv_id", "")
+        if not aid:
+            continue
+        outcome = fetch_paper_text.invoke({"arxiv_id": aid})
+        print(f"  {aid}: {outcome}", flush=True)
 
     store = get_paper_store()
-    print(f"[orchestrator] paper store after agent run: {len(store)} papers", flush=True)
+    print(f"[orchestrator] paper store: {len(store)} papers loaded", flush=True)
 
     if not store:
-        return {"error": "agent loaded no papers", "raw": "", "_papers_meta": paper_meta}
+        return {"error": "no PDFs could be loaded", "raw": "", "_papers_meta": paper_meta}
 
     # Call synthesis directly — don't trust the model to call it correctly
     print("[orchestrator] running synthesis...", flush=True)

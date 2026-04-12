@@ -1,7 +1,33 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Env
 .env
+venv/
+.venv/
+env/
+
+# Editors
 .vscode/
+.idea/
+
+# Claude Code local settings
+.claude/
+
+# Project-specific: downloaded PDFs and FAISS indexes
+*.pdf
+*.pkl
+*.faiss
+
+# Logs
+*.log
+
+# CLAUDE.md is a local prompt file, not for the repo
 CLAUDE.md
