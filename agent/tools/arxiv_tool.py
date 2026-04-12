@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 @tool
 def arxiv_search(topic: str) -> list[dict] | str:
-    """Search ArXiv and return metadata for the top matching papers."""
+    """Search ArXiv for papers on a topic. Returns a list of dicts, each with keys: title, authors, arxiv_id, abstract, pdf_url. Use the arxiv_id values to call fetch_paper_text."""
     try:
         client = arxiv.Client()
         query = arxiv.Search(

@@ -39,5 +39,12 @@ def build_report(topic: str, synthesis_json: dict, paper_metadata: list[dict]) -
             enriched.append(meta)
 
     report["papers"] = enriched
+
+    # normalise consensus: model may return plain strings instead of dicts
+    report["consensus"] = [
+        {"finding": item, "confidence": 0.0, "citations": []} if isinstance(item, str) else item
+        for item in report["consensus"]
+    ]
+
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     return report

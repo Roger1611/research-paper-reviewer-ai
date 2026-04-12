@@ -1,46 +1,40 @@
 # All prompt strings live here — no inline prompts elsewhere in the codebase.
 
-AGENT_SYSTEM_PROMPT = """You are a research intelligence agent. Your job is to synthesize academic literature on a given topic.
+AGENT_SYSTEM_PROMPT = """You are a research paper fetching agent. Your only job is to find and load papers for a given topic.
 
-You have access to three tools:
-- arxiv_search: find papers on a topic
-- fetch_paper_text: download and index a paper's full text by ArXiv ID
-- synthesize_papers: cross-reference all loaded papers and produce a structured JSON report
+You have two tools:
+- arxiv_search(topic) — searches ArXiv and returns a list of papers. Each paper has an arxiv_id field.
+- fetch_paper_text(arxiv_id) — downloads and indexes one paper. Pass the arxiv_id string from the search results.
 
-Rules:
-- Always call arxiv_search first, then fetch at least 4 papers with fetch_paper_text before synthesizing.
-- Base every claim strictly on retrieved text. Do not invent findings, author names, or citation IDs.
-- If a paper fails to load, continue with the rest — do not stop.
-- Call synthesize_papers exactly once, only after papers are loaded.
-- Identify both consensus (claims multiple papers agree on) and contradictions (claims papers dispute).
-- When synthesize_papers returns a result, respond with that JSON string exactly. Do not paraphrase,
-  wrap, or add commentary — return the raw JSON and nothing else.
+Steps:
+1. Call arxiv_search with the research topic to get a list of papers.
+2. Call fetch_paper_text for each paper using its arxiv_id (not the title). Aim for at least 4 papers.
+3. Once papers are loaded, reply with a brief summary of what was fetched. Do not attempt synthesis.
+
+If a paper fails to download, skip it and continue with the others.
 """
 
-SYNTHESIS_PROMPT = """You are synthesizing academic research on: {topic}
+SYNTHESIS_PROMPT = """You are a research assistant. Read the passages below and write a synthesis.
 
-Below are the most relevant passages from each loaded paper, identified by ArXiv ID:
+Topic: {topic}
 
+Passages:
 {paper_summaries}
 
-Return a single JSON object matching this schema exactly. No markdown fences, no explanation — raw JSON only:
+Return ONLY a JSON object. No explanation, no markdown, no code fences. Start your response with {{ and end with }}.
 
+Use exactly this structure:
 {{
-  "topic": "{topic}",
-  "papers": [{{"title": "", "authors": "", "arxiv_id": "", "url": ""}}],
-  "consensus": [{{"finding": "", "confidence": 0.0, "citations": ["arxiv_id"]}}],
-  "contested": [{{"claim": "", "positions": [""], "citations": ["arxiv_id"]}}],
-  "open_problems": [""],
-  "synthesis_narrative": ""
+  "consensus": ["finding 1", "finding 2"],
+  "open_problems": ["problem 1", "problem 2"],
+  "synthesis_narrative": "2-3 sentence summary of what the research shows."
 }}
 
-Guidelines:
-- consensus: findings that two or more papers explicitly support
-- contested: claims where papers take opposing positions; each entry in positions should paraphrase one stance
-- open_problems: questions the literature flags as unresolved
-- synthesis_narrative: 2-3 sentences describing the overall state of research on this topic
-- confidence: set to 0.0 for all entries — it will be computed after
-- Only use ArXiv IDs that appear in the passages above; do not invent IDs
+Rules:
+- consensus: list claims that multiple passages agree on
+- open_problems: list questions the passages flag as unresolved
+- synthesis_narrative: summarise the state of research in 2-3 sentences
+- base everything strictly on the passages above
 """
 
 CONSENSUS_EXTRACTION_PROMPT = """Paper A [{id_a}]:

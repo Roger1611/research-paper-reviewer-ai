@@ -43,6 +43,8 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 def _score_confidence(report: dict, paper_chunks: dict[str, list[str]], topic_emb: np.ndarray) -> dict:
     """Replace placeholder 0.0 confidence values with cosine similarity scores."""
     for finding in report.get("consensus", []):
+        if not isinstance(finding, dict):
+            continue  # simplified schema returns strings; skip scoring
         cited = [c for aid in finding.get("citations", []) for c in paper_chunks.get(aid, [])]
         if not cited:
             finding["confidence"] = 0.0
@@ -54,10 +56,12 @@ def _score_confidence(report: dict, paper_chunks: dict[str, list[str]], topic_em
 
 @tool
 def synthesize_papers(topic: str) -> str:
-    """Cross-reference all loaded papers and return a JSON synthesis report."""
+    """Cross-reference all papers loaded so far and return a JSON synthesis report. Pass the research topic as a plain string (e.g. 'knowledge distillation'). Do NOT pass a list of papers — call this after fetch_paper_text has been called for each paper."""
     store = get_paper_store()
     if not store:
         return "no papers loaded — run fetch_paper_text on at least one paper first"
+
+    print(f"[synthesis] paper store has {len(store)} papers: {list(store.keys())}", flush=True)
 
     topic_emb = get_embeddings([topic])[0]
 
@@ -69,6 +73,7 @@ def synthesize_papers(topic: str) -> str:
             top_k=config.SYNTHESIS_TOP_K,
         )
         paper_chunks[arxiv_id] = hits
+        print(f"[synthesis] {arxiv_id}: retrieved {len(hits)} chunks", flush=True)
 
     paper_summaries = "\n\n".join(
         f"[{aid}]\n" + "\n---\n".join(chunks)
@@ -82,6 +87,8 @@ def synthesize_papers(topic: str) -> str:
     except Exception as e:
         logger.error("ollama call failed: %s", e)
         return f"couldn't reach Ollama: {e}"
+
+    print(f"[synthesis] raw Ollama response:\n{raw}\n---", flush=True)
 
     report = _parse_json(raw)
     if report is None:
