@@ -1,38 +1,22 @@
 import json
 import logging
-import re
+from typing import Literal
 
 import numpy as np
-from langchain_core.messages import HumanMessage, ToolMessage
-from langchain_ollama import ChatOllama
-from langgraph.prebuilt import create_react_agent
+from langgraph.graph import StateGraph, END
 
 import config
-from agent.prompts import AGENT_SYSTEM_PROMPT
+from agent.backend import LLMBackend
+from agent.prompts import TOPIC_DECOMPOSITION_PROMPT
+from agent.state import AgentState
 from agent.tools.arxiv_tool import arxiv_search
+from agent.tools.extract_tool import extract_methods_problems
+from agent.tools.gap_tool import detect_gaps as _detect_gaps
+from agent.tools.hypothesis_tool import generate_hypotheses as _generate_hypotheses, score_is_sufficient
 from agent.tools.pdf_tool import fetch_paper_text, get_paper_store
-from agent.tools.synthesis_tool import synthesize_papers
 from core.embedder import get_embeddings
 
 logger = logging.getLogger(__name__)
-
-
-def _extract_json(text: str) -> dict | None:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[^\n]*\n?", "", text)
-        text = re.sub(r"\n?```$", "", text.strip())
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group())
-        except json.JSONDecodeError:
-            pass
-    return None
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -53,68 +37,138 @@ def _filter_relevant(papers: list[dict], topic: str, threshold: float = 0.25) ->
     return kept
 
 
-def _extract_arxiv_meta(messages: list) -> list[dict]:
-    """Pull the arxiv_search result out of the tool messages, if present."""
-    for msg in messages:
-        if isinstance(msg, ToolMessage) and getattr(msg, "name", "") == "arxiv_search":
-            try:
-                parsed = json.loads(msg.content)
-            except (json.JSONDecodeError, TypeError):
-                parsed = None
-            if isinstance(parsed, list):
-                return parsed
-    return []
-
-
-def run_research_agent(topic: str, callbacks: list | None = None) -> dict:
-    """Fetch papers via the agent, then run synthesis directly and return the report dict."""
-    llm = ChatOllama(model=config.OLLAMA_MODEL, base_url=config.OLLAMA_BASE_URL)
-
-    invoke_config: dict = {"recursion_limit": 15}
-    if callbacks:
-        invoke_config["callbacks"] = callbacks
-
-    # Only give the agent arxiv_search — it can't be trusted to reliably chain tool calls
+def decompose_topic(state: AgentState) -> dict:
+    llm = LLMBackend(state["backend"])
+    prompt = TOPIC_DECOMPOSITION_PROMPT.format(topic=state["topic"])
     try:
-        graph = create_react_agent(llm, [arxiv_search], prompt=AGENT_SYSTEM_PROMPT)
-        result = graph.invoke(
-            {"messages": [HumanMessage(content=f"Search ArXiv for papers on this topic: {topic}")]},
-            config=invoke_config,
-        )
+        result = json.loads(llm.call(prompt, use_strong=False))
+        domain_a = result["domain_a"]
+        domain_b = result["domain_b"]
     except Exception as e:
-        logger.error("agent execution failed: %s", e)
-        return {"error": str(e), "raw": ""}
+        logger.error("topic decomposition failed: %s", e)
+        # fall back to treating the whole topic as both domains
+        domain_a = state["topic"]
+        domain_b = state["topic"]
+    print(f"[decompose] Domain A: {domain_a} | Domain B: {domain_b}", flush=True)
+    return {"domain_a": domain_a, "domain_b": domain_b}
 
-    paper_meta = _extract_arxiv_meta(result["messages"])
-    if not paper_meta:
-        logger.error("arxiv_search returned no results")
-        return {"error": "no papers found", "raw": "", "_papers_meta": []}
 
-    paper_meta = _filter_relevant(paper_meta, topic)
-    if not paper_meta:
-        return {"error": "all papers were off-topic after relevance filtering", "raw": "", "_papers_meta": []}
+def search_domains(state: AgentState) -> dict:
+    def fetch_domain(domain: str) -> list[dict]:
+        raw = arxiv_search.invoke({"topic": domain})
+        papers = raw if isinstance(raw, list) else []
+        papers = _filter_relevant(papers, domain)
+        for paper in papers:
+            aid = paper.get("arxiv_id", "")
+            if aid:
+                fetch_paper_text.invoke({"arxiv_id": aid})
+        return papers
 
-    print(f"[orchestrator] fetching {len(paper_meta)} papers...", flush=True)
-    for paper in paper_meta:
-        aid = paper.get("arxiv_id", "")
-        if not aid:
-            continue
-        outcome = fetch_paper_text.invoke({"arxiv_id": aid})
-        print(f"  {aid}: {outcome}", flush=True)
+    papers_a = fetch_domain(state["domain_a"])
+    papers_b = fetch_domain(state["domain_b"])
+    print(f"[search] domain_a: {len(papers_a)} papers | domain_b: {len(papers_b)} papers", flush=True)
+    return {"papers_a": papers_a, "papers_b": papers_b}
 
+
+def extract_knowledge(state: AgentState) -> dict:
     store = get_paper_store()
-    print(f"[orchestrator] paper store: {len(store)} papers loaded", flush=True)
+    all_methods: list[str] = []
+    all_problems: list[str] = []
 
-    if not store:
-        return {"error": "no PDFs could be loaded", "raw": "", "_papers_meta": paper_meta}
+    for paper in state["papers_a"]:
+        aid = paper.get("arxiv_id", "")
+        if aid not in store:
+            continue
+        result = extract_methods_problems(aid, state["domain_a"], store[aid]["chunks"], state["backend"])
+        all_methods.extend(result["methods"])
 
-    # Call synthesis directly — don't trust the model to call it correctly
-    print("[orchestrator] running synthesis...", flush=True)
-    raw_synthesis = synthesize_papers.invoke({"topic": topic})
-    synthesis = _extract_json(raw_synthesis) if isinstance(raw_synthesis, str) else raw_synthesis
+    for paper in state["papers_b"]:
+        aid = paper.get("arxiv_id", "")
+        if aid not in store:
+            continue
+        result = extract_methods_problems(aid, state["domain_b"], store[aid]["chunks"], state["backend"])
+        all_problems.extend(result["problems"])
 
-    if synthesis is None:
-        return {"error": "synthesis returned invalid JSON", "raw": raw_synthesis, "_papers_meta": paper_meta}
+    return {
+        "methods": list(set(all_methods)),
+        "problems": list(set(all_problems)),
+    }
 
-    synthesis["_papers_meta"] = paper_meta
-    return synthesis
+
+def detect_gaps(state: AgentState) -> dict:
+    gaps = _detect_gaps(state["methods"], state["problems"], state["backend"])
+    return {"gaps": gaps}
+
+
+def generate_hypotheses(state: AgentState) -> dict:
+    hypotheses = _generate_hypotheses(state["gaps"], get_paper_store(), state["topic"], state["backend"])
+    return {"hypotheses": hypotheses, "iteration": state["iteration"] + 1}
+
+
+def should_loop(state: AgentState) -> Literal["generate_hypotheses", "build_report"]:
+    if not score_is_sufficient(state["hypotheses"]) and state["iteration"] < config.MAX_HYPOTHESIS_ITERATIONS:
+        print(
+            f"[loop] iteration {state['iteration']}: top score insufficient, re-running hypothesis generation",
+            flush=True,
+        )
+        return "generate_hypotheses"
+    return "build_report"
+
+
+def build_report(state: AgentState) -> dict:
+    report = {
+        "topic": state["topic"],
+        "domain_a": state["domain_a"],
+        "domain_b": state["domain_b"],
+        "papers_a": state["papers_a"],
+        "papers_b": state["papers_b"],
+        "methods": state["methods"],
+        "problems": state["problems"],
+        "gaps": state["gaps"],
+        "hypotheses": state["hypotheses"],
+        "iterations": state["iteration"],
+    }
+    return {"final_report": report}
+
+
+def _build_graph() -> StateGraph:
+    g = StateGraph(AgentState)
+    g.add_node("decompose_topic", decompose_topic)
+    g.add_node("search_domains", search_domains)
+    g.add_node("extract_knowledge", extract_knowledge)
+    g.add_node("detect_gaps", detect_gaps)
+    g.add_node("generate_hypotheses", generate_hypotheses)
+    g.add_node("build_report", build_report)
+
+    g.set_entry_point("decompose_topic")
+    g.add_edge("decompose_topic", "search_domains")
+    g.add_edge("search_domains", "extract_knowledge")
+    g.add_edge("extract_knowledge", "detect_gaps")
+    g.add_edge("detect_gaps", "generate_hypotheses")
+    g.add_conditional_edges("generate_hypotheses", should_loop)
+    g.add_edge("build_report", END)
+
+    return g.compile()
+
+
+_graph = _build_graph()
+
+
+def run_research_agent(topic: str, backend: str = config.DEFAULT_BACKEND) -> dict:
+    initial: AgentState = {
+        "topic": topic,
+        "backend": backend,
+        "domain_a": "",
+        "domain_b": "",
+        "papers_a": [],
+        "papers_b": [],
+        "methods": [],
+        "problems": [],
+        "gaps": [],
+        "hypotheses": [],
+        "iteration": 0,
+        "final_report": {},
+        "error": "",
+    }
+    result = _graph.invoke(initial)
+    return result.get("final_report", {})
